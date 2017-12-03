@@ -16,9 +16,8 @@
  *
  *   You should have received a copy of the GNU General Public License
  *   along with this program. If not, see <http://www.gnu.org/licenses/>.
- 
  ******************************************************************************/
-
+// Downright upgraded by Andrey Beletskiy
 #include <iostream>
 #include <opencv2/opencv.hpp>
 #include <string.h>
@@ -26,7 +25,7 @@
 #include <sys/stat.h>
 #include <OpenCL/opencl.h>
 
-#define COMPUTE_KERNEL_FILENAME         ("/Users/user/Documents/opencl/convolution/oclFilter.cl") // full path to file
+#define COMPUTE_KERNEL_FILENAME ("/home/andrew/Programming/LAB2/oclFilter.cl") // full path to file
 
 using namespace std;
 
@@ -44,10 +43,10 @@ cl_kernel kernel;                   // compute kernel
 cl_mem input;                       // device memory used for the input array
 cl_mem output;                      // device memory used for the output array
 
-unsigned int count2 = 307200;       // 1D array of image data 640*480
-int gpu = 1;                        // GPU flag, set 0 for OpenCL computing at your CPU
-double avgTime = 0;                 // statistics info | average time for a rendering one image
-int counts = 0;                     // sotal count of made computings
+unsigned int pixelCount = width * height; // size of 1D array of image data Width x Height
+int gpu = 1;                          // GPU flag, set 0 for OpenCL computing at your CPU
+double avgTime = 0;                   // statistics info | average time for a rendering one image
+int counts = 0;                       // total count of made computings
 
 
 static int LoadTextFromFile(const char *file_name, char **result_string, size_t *string_len)
@@ -89,13 +88,13 @@ int initMyFilterCl()
         printf("Error: Failed to create a device group!\n");
         return EXIT_FAILURE;
     }
-    context = clCreateContext(0, 1, &device_id, NULL, NULL, &err);
+    context = clCreateContext(NULL, 1, &device_id, NULL, NULL, &err);
     if (!context)
     {
         printf("Error: Failed to create a compute context!\n");
         return EXIT_FAILURE;
     }
-    commands = clCreateCommandQueue(context, device_id, 0, &err);
+    commands = clCreateCommandQueue(context, device_id, NULL, &err);
     if (!commands)
     {
         printf("Error: Failed to create a command commands!\n");
@@ -110,23 +109,32 @@ int initMyFilterCl()
         printf("Error: Failed to load kernel source!\n");
         return EXIT_FAILURE;
     }
-    program = clCreateProgramWithSource(context, 1, (const char **) & source, NULL, &err);
+    program = clCreateProgramWithSource(context, 1, (const char **) &source, NULL, &err);
     if (!program)
     {
         printf("Error: Failed to create compute program!\n");
         return EXIT_FAILURE;
     }
+    //  cl_int clBuildProgram (cl_program program,
+        // cl_uint num_devices,
+        // const cl_device_id *device_list,
+        // const char *options,
+        // void (*pfn_notify)(cl_program, void *user_data),
+        // void *user_data)
     err = clBuildProgram(program, 0, NULL, "-cl-std=CL1.2", NULL, NULL); // you can use "-cl-std=CL2.0" or "-cl-std=CL1.1" but local workgroups must be equal in v1.1
     if (err != CL_SUCCESS)
     {
         size_t len;
-        char buffer[3072000];
+        char buffer[pixelCount];
         
         printf("Error: Failed to build program executable!\n");
         clGetProgramBuildInfo(program, device_id, CL_PROGRAM_BUILD_LOG, sizeof(buffer), buffer, &len);
         printf("%s\n", buffer);
         exit(1);
     }
+    // cl_kernel clCreateKernel (  cl_program  program,
+    //                             const char *kernel_name,
+    //                             cl_int *errcode_ret)
     kernel = clCreateKernel(program, "myFilter", &err);
     if (!kernel || err != CL_SUCCESS)
     {
@@ -135,9 +143,8 @@ int initMyFilterCl()
     }
 
     // Create the input and output arrays in device memory for our calculation
-    //
-    input = clCreateBuffer(context,  CL_MEM_READ_ONLY,  sizeof(uchar) * count2, NULL, NULL);
-    output = clCreateBuffer(context, CL_MEM_WRITE_ONLY, sizeof(uchar) * count2, NULL, NULL);
+    input = clCreateBuffer(context,  CL_MEM_READ_ONLY,  sizeof(uchar) * pixelCount, NULL, NULL);
+    output = clCreateBuffer(context, CL_MEM_WRITE_ONLY, sizeof(uchar) * pixelCount, NULL, NULL);
     // device memory used for the output array
     if (!input || !output)
     {
@@ -153,11 +160,21 @@ int initMyFilterCl()
     return 0;
 }
 
-int computeMyFilterCl(uchar* inputData,uchar* data2)
+int computeMyFilterCl(uchar* inputData,uchar* outputData)
 {
     // Write our data set into the input array in device memory
     //
-    err = clEnqueueWriteBuffer(commands, input, CL_TRUE, 0, sizeof(uchar) * count2, inputData, 0, NULL, NULL);
+
+     // cl_int clEnqueueWriteBuffer (  cl_command_queue command_queue,
+     //                                cl_mem buffer,
+     //                                cl_bool blocking_write,
+     //                                size_t offset,
+     //                                size_t cb,
+     //                                const void *ptr,
+     //                                cl_uint num_events_in_wait_list,
+     //                                const cl_event *event_wait_list,
+     //                                cl_event *event)
+    err = clEnqueueWriteBuffer(commands, input, CL_TRUE, 0, sizeof(uchar) * pixelCount, inputData, 0, NULL, NULL);
     if (err != CL_SUCCESS)
     {
         printf("Error: Failed to write to source array!\n");
@@ -166,6 +183,10 @@ int computeMyFilterCl(uchar* inputData,uchar* data2)
     
     // Set the arguments to our compute kernel
     //
+     // cl_int clSetKernelArg (    cl_kernel kernel,
+     //                            cl_uint arg_index,
+     //                            size_t arg_size,
+     //                            const void *arg_value
     err = 0;
     err |= clSetKernelArg(kernel, 0, sizeof(cl_mem), &input);
     err |= clSetKernelArg(kernel, 1, sizeof(cl_mem), &output);
@@ -176,14 +197,19 @@ int computeMyFilterCl(uchar* inputData,uchar* data2)
     }
     // Get the maximum work group size for executing the kernel on the device
     //
-    err = clGetKernelWorkGroupInfo(kernel, device_id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(local), &local, NULL);
-    //cout << "Local Size = " << CL_KERNEL_WORK_GROUP_SIZE<< endl;
-    if (err != CL_SUCCESS)
-    {
-        printf("Error: Failed to retrieve kernel work group info! %d\n", err);
-        exit(1);
-    }
-    global = count2;
+    global = pixelCount;
+
+
+    // clEnqueueNDRangeKernel (    cl_command_queue command_queue,
+    //                             cl_kernel kernel,
+    //                             cl_uint work_dim,
+    //                             const size_t *global_work_offset,
+    //                             const size_t *global_work_size,
+    //                             const size_t *local_work_size,
+    //                             cl_uint num_events_in_wait_list,
+    //                             const cl_event *event_wait_list,
+    //                             cl_event *event)
+
     // Execute the kernel over the entire range of our 1d input data set
     // using the maximum number of work group items for this device
     //
@@ -195,9 +221,8 @@ int computeMyFilterCl(uchar* inputData,uchar* data2)
     }
     
     // Wait for the command commands to get serviced before reading back results
-    //
     clFinish(commands);
-    err = clEnqueueReadBuffer( commands, output, CL_TRUE, 0, sizeof(uchar) * count2, data2, 0, NULL, NULL );
+    err = clEnqueueReadBuffer( commands, output, CL_TRUE, 0, sizeof(uchar) * pixelCount, outputData, 0, NULL, NULL );
     if (err != CL_SUCCESS)
     {
         printf("Error: Failed to read output array! %d\n", err);
@@ -215,9 +240,14 @@ void releaseMyFilterCl(){
     clReleaseContext(context);
 }
 
-void show(const std::string& name, const cv::Mat& mat);
-void showMatrix(uchar* data, int width);
-void myFilter(uchar* data, uchar* data2);
+void show(const std::string& name, const cv::Mat& mat)
+{
+    if (!mat.empty())
+    {
+        cv::imshow(name, mat);
+    }
+}
+
 
 int main()
 {
@@ -227,12 +257,14 @@ int main()
         std::cout << "cam open fail" << std::endl;
         return -1;
     }
-    cap.set(CV_CAP_PROP_FRAME_HEIGHT, 120);
-    cap.set(CV_CAP_PROP_FRAME_WIDTH, 70);
+    // cap.set(CV_CAP_PROP_FRAME_HEIGHT, 120);
+    // cap.set(CV_CAP_PROP_FRAME_WIDTH, 70);
+    cap.set(CV_CAP_PROP_FRAME_HEIGHT, height);
+    cap.set(CV_CAP_PROP_FRAME_WIDTH, width)
     
     cv::Mat frame, frameGray;
     uchar* data;
-    uchar data2[640*480];
+    uchar outputData[pixelCount];
     initMyFilterCl();
     for (;;)
     {
@@ -241,88 +273,21 @@ int main()
         start1 = std::clock();
         cap >> frame;
         cv::cvtColor(frame, frameGray, CV_RGB2GRAY);
+
         data = frameGray.data;
-        showMatrix(data,frameGray.cols);
-        computeMyFilterCl(data,data2);
-        //myFilter(data,data2);
-        showMatrix(data2,frameGray.cols);
+        computeMyFilterCl(data,outputData);
         
         duration1 = ( std::clock() - start1 ) / (double) CLOCKS_PER_SEC;
         avgTime+=duration1;
         counts++;
         std::cout << "time: " << duration1 << " avgTime: " << avgTime/counts <<'\n';
-        cv::Mat frameOutBefore(frameGray.rows, frameGray.cols, CV_8UC1, data);
-        show("frameOutBefore", frameOutBefore);
-        cv::Mat frameOut3(frameGray.rows, frameGray.cols, CV_8UC1, data2);
-        show("frameOut", frameOut3);
+        show("frame before", frameGray)
+
+        cv::Mat frameOut3(frameGray.rows, frameGray.cols, CV_8U, outputData);
+        show("frame after", frameOut3);
 
         cv::waitKey(10);
     }
-    //releaseMyFilterCl();
+    releaseMyFilterCl();
     return 0;
-}
-
-void showMatrix(uchar* data,int width){
-    cout << "\n";
-    cout << (int)data[300 + 120 * width] << "|" << (int)data[300 + 121 * width] << "|" << (int)data[300 + 122 * width] << endl;
-    cout << (int)data[301 + 120 * width] << "|" << (int)data[301 + 121 * width] << "|" << (int)data[301 + 122 * width] << endl;
-    cout << (int)data[302 + 120 * width] << "|" << (int)data[302 + 121 * width] << "|" << (int)data[302 + 122 * width] << endl;
-}
-
-void show(const std::string& name, const cv::Mat& mat)
-{
-    if (!mat.empty())
-    {
-        cv::imshow(name, mat);
-    }
-}
-
-// One thread cpu function
-//
-void myFilter(uchar* data,uchar* data2)
-{
-    static float kernelMatrix[] = {
-        -1, -0, 1,
-        -2, -0, 2,
-        -1, -0, 1};
-    
-    int kernelWidth = 3;
-    int kernelHeight = 3;
-    
-    for (int x = 0; x < width; x++)
-    {
-        for (int y = 0; y < height; y++)
-        {
-            if (x > 20 && x < width-20 && y > 20 && y < height-20 ) {
-                double rSum = 0, kSum = 0;
-                
-                for (int i = 0; i < kernelWidth; i++)
-                {
-                    for (int j = 0; j < kernelHeight; j++)
-                    {  
-                        int pixelPosX = x + (i - (kernelWidth / 2));
-                        int pixelPosY = y + (j - (kernelHeight / 2));
-                        
-                        if ((pixelPosX < 0) ||
-                            (pixelPosX >= width) ||
-                            (pixelPosY < 0) ||
-                            (pixelPosY >= height)) continue;
-                        
-                        auto r = data[pixelPosX + pixelPosY * width];
-                        
-                        double kernelVal = kernelMatrix[i + j * kernelWidth];
-                        rSum += r * kernelVal;
-                        
-                        kSum += kernelVal;
-                    }
-                }        
-                if (kSum == 0) kSum = 1;
-                rSum /= kSum;
-                auto rx = (char)rSum;
-                data2[x+y*width] = rx;
-            }else{
-                data2[x+y*width] = data[x+y*width];
-            }
-        }
-    }
 }
